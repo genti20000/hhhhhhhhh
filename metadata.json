@@ -1,6 +1,6 @@
 {
   "name": "Remix SingShot",
-  "description": "Live audience-engagement and big-screen entertainment platform for London Karaoke Club in Soho.",
+  "description": "Android app & Google TV broadcast experience for London Karaoke Club, Soho. Features 10-foot Leanback UI, D-pad remote navigation, wake-lock, overscan safe zones, and live audience photo rotation.",
   "requestFramePermissions": [
     "camera"
   ],

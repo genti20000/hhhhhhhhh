@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { QRCodeSVG } from 'qrcode.react';
+import { SessionQRCode } from '../common/SessionQRCode';
 import { useSingShot } from '../../services/store';
 import { OccasionType, ReactionType, Submission } from '../../types';
 import { 
@@ -325,11 +325,6 @@ export const GuestMobileView: React.FC = () => {
     }, 2200);
   };
 
-  // Public join URL
-  const qrUrl = typeof window !== 'undefined' 
-    ? `${window.location.origin}/?mode=guest&event=${event.slug}`
-    : `https://londonkaraokeclub.co.uk/join`;
-
   return (
     <div className="w-full min-h-screen bg-[#070709] text-white flex flex-col justify-between max-w-md mx-auto relative overflow-hidden font-sans border-x border-neutral-800/80 shadow-2xl">
       {/* Hidden File Input for Gallery Upload */}
@@ -477,6 +472,12 @@ export const GuestMobileView: React.FC = () => {
                   </button>
                 </div>
               </div>
+
+              {/* Dynamic Table Join QR Code */}
+              <SessionQRCode
+                variant="mobile-inline"
+                onExpand={() => setShowQrModal(true)}
+              />
             </motion.div>
           )}
 
@@ -900,6 +901,12 @@ export const GuestMobileView: React.FC = () => {
                 </div>
               </div>
 
+              {/* Share Table Join QR */}
+              <SessionQRCode
+                variant="mobile-inline"
+                onExpand={() => setShowQrModal(true)}
+              />
+
               {/* Secondary Actions: Report content on screen & Send another */}
               <div className="flex items-center justify-between pt-2 text-xs">
                 <button
@@ -926,20 +933,27 @@ export const GuestMobileView: React.FC = () => {
 
       {/* QR MODAL */}
       {showQrModal && (
-        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="w-full max-w-xs bg-neutral-900 border border-amber-400/50 p-6 rounded-3xl text-center space-y-4 shadow-2xl">
+        <div
+          className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setShowQrModal(false)}
+        >
+          <div
+            className="w-full max-w-xs bg-neutral-900 border border-amber-400/50 p-6 rounded-3xl space-y-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between">
-              <span className="text-xs font-black uppercase tracking-wider text-amber-400">JOIN LIVE EXPERIENCE</span>
-              <button onClick={() => setShowQrModal(false)} className="text-neutral-400 hover:text-white cursor-pointer">
+              <span className="text-xs font-black uppercase tracking-wider text-amber-400">
+                JOIN LIVE EXPERIENCE
+              </span>
+              <button
+                onClick={() => setShowQrModal(false)}
+                className="text-neutral-400 hover:text-white cursor-pointer"
+                aria-label="Close QR modal"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <div className="p-3 bg-white rounded-2xl inline-block shadow-inner">
-              <QRCodeSVG value={qrUrl} size={160} />
-            </div>
-            <div className="text-xs text-neutral-300">
-              Point phone camera to join <strong>{venue.name}</strong> without installing an app.
-            </div>
+            <SessionQRCode variant="modal" />
           </div>
         </div>
       )}

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import confetti from 'canvas-confetti';
-import { QRCodeSVG } from 'qrcode.react';
+import { SessionQRCode } from '../common/SessionQRCode';
 import { useSingShot } from '../../services/store';
 import { CrowdReactionEvent, HostMomentType } from '../../types';
 import { 
@@ -15,14 +15,27 @@ import {
   Music, 
   Volume2, 
   ArrowRight,
-  PartyPopper,
-  X
+  X,
+  Tv,
+  Menu,
+  Pause,
+  Play,
+  Grid,
+  ShieldCheck,
+  Maximize2
 } from 'lucide-react';
 import { 
   AnimatedVoiceEqualizer, 
   AnimatedFloatingNotes,
   StageDiscoLasers
 } from '../common/LiveStageAtmosphere';
+import { useGoogleTVRemote } from '../../hooks/useGoogleTVRemote';
+import { useScreenWakeLock } from '../../hooks/useScreenWakeLock';
+import { TVOverscanGuide } from './TVOverscanGuide';
+import { GoogleTVQuickBar } from './GoogleTVQuickBar';
+import { VirtualGoogleTVRemote } from './VirtualGoogleTVRemote';
+import { AndroidTVPackageModal } from './AndroidTVPackageModal';
+import { PWAInstallButton } from '../common/PWAInstallButton';
 
 interface TVDisplayProps {
   isStandalone?: boolean;
@@ -71,6 +84,59 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
   const containerRef = useRef<HTMLDivElement>(null);
   const prevHeroIdRef = useRef<string | undefined>(undefined);
 
+  // Google TV & Android TV 10-Foot State
+  const [isAutoRotating, setIsAutoRotating] = useState(true);
+  const [overscanPercent, setOverscanPercent] = useState<number>(0);
+  const [overscanGuideVisible, setOverscanGuideVisible] = useState(false);
+  const [largeQR, setLargeQR] = useState(false);
+  const [isOSDOpen, setIsOSDOpen] = useState(false);
+  const [isAndroidModalOpen, setIsAndroidModalOpen] = useState(false);
+  const [lowerThirdActive, setLowerThirdActive] = useState(true);
+
+  // Screen WakeLock for Android TV / Google TV (prevents screensaver during show)
+  const { isLocked: wakeLockActive } = useScreenWakeLock(true);
+
+  // Google TV Remote Control Engine (Hardware remote D-pad + Virtual on-screen remote)
+  const { focusedId, lastRemoteKey, triggerRemoteButton } = useGoogleTVRemote({
+    enabled: true,
+    onMenuToggle: () => setIsOSDOpen(prev => !prev),
+    onNextPhoto: () => {
+      store.nextStagePhoto();
+      setTransitionIndex(prev => (prev + 1) % transitionStyles.length);
+    },
+    onPrevPhoto: () => {
+      store.prevStagePhoto();
+      setTransitionIndex(prev => (prev - 1 + transitionStyles.length) % transitionStyles.length);
+    },
+    onPlayPauseToggle: () => setIsAutoRotating(prev => !prev),
+    onBackPress: () => {
+      if (isAndroidModalOpen) {
+        setIsAndroidModalOpen(false);
+      } else if (isOSDOpen) {
+        setIsOSDOpen(false);
+      } else if (overscanGuideVisible) {
+        setOverscanGuideVisible(false);
+      } else if (event.activeHostMoment?.active) {
+        store.clearHostMoment();
+      } else if (activeScene === 'STAR_OF_NIGHT') {
+        store.resetStarOfNight();
+      }
+    },
+    onHostMomentQuick: (num) => {
+      const momentNames: Record<number, HostMomentType> = {
+        1: 'Make Some Noise',
+        2: 'Birthday Shot',
+        3: 'Last Song',
+        4: '30 Minutes Left',
+        5: 'One More Song',
+        6: 'Cheers Soho'
+      };
+      if (momentNames[num]) {
+        store.triggerHostMoment(momentNames[num]);
+      }
+    }
+  });
+
   // High contrast mode check
   const isHighContrast = event.settings?.highContrastMode ?? false;
 
@@ -96,6 +162,7 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
 
   // Slideshow auto-rotation: every 12-15 seconds (default 14s)
   useEffect(() => {
+    if (!isAutoRotating) return;
     if (activeScene !== 'SPOTLIGHT' || approvedSubmissions.length <= 1) return;
     if (event.activeHostMoment?.active) return; // Don't rotate while a moment takeover is on
 
@@ -106,7 +173,7 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
     }, rotationSeconds * 1000);
 
     return () => clearInterval(timer);
-  }, [activeScene, approvedSubmissions.length, event.settings?.autoRotateSeconds, event.activeHostMoment, store]);
+  }, [isAutoRotating, activeScene, approvedSubmissions.length, event.settings?.autoRotateSeconds, event.activeHostMoment, store]);
 
   // Flashbulb and confetti on new photo
   const heroGuest = featuredSubmission || approvedSubmissions[0];
@@ -180,11 +247,6 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
     return unsub;
   }, [store]);
 
-  // Dynamic public QR code URL based on current venue and event
-  const qrUrl = typeof window !== 'undefined' 
-    ? `${window.location.origin}/?mode=guest&event=${event.slug}`
-    : `https://londonkaraokeclub.co.uk/join`;
-
   // Total reaction counts for live HUD
   const totalReactions = event.metrics?.totalReactions || 0;
 
@@ -196,6 +258,7 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
         isStandalone ? 'h-screen max-w-none' : 'max-w-[1920px] mx-auto rounded-2xl shadow-[0_0_80px_rgba(0,0,0,0.9)] border border-neutral-800/80'
       } ${isHighContrast ? 'contrast-125' : ''}`}
       style={{
+        padding: overscanPercent > 0 ? `${overscanPercent}%` : undefined,
         backgroundColor: '#070709',
         backgroundImage: `
           radial-gradient(ellipse at 50% 0%, rgba(168, 85, 247, 0.18) 0%, transparent 60%),
@@ -351,39 +414,61 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
           </div>
         </div>
 
-        {/* Center: Live Cheer Counter HUD */}
-        <div className="hidden md:flex items-center gap-3 px-4 py-2 rounded-2xl bg-neutral-900/80 border border-neutral-800 backdrop-blur-md shadow-xl">
-          <div className="flex items-center gap-1.5 text-xs font-black uppercase text-amber-400 tracking-wider">
-            <Flame className="w-4 h-4 fill-amber-400" />
-            AUDIENCE CHEERS:
+        {/* Center: Live Cheer Counter HUD & Google TV 10-Foot Remote Pill */}
+        <div className="hidden md:flex items-center gap-3">
+          <div className="flex items-center gap-2.5 px-3.5 py-1.5 rounded-2xl bg-neutral-900/90 border border-neutral-800 backdrop-blur-md shadow-xl">
+            <div className="flex items-center gap-1.5 text-xs font-black uppercase text-amber-400 tracking-wider">
+              <Flame className="w-4 h-4 fill-amber-400" />
+              CHEERS:
+            </div>
+            <span className="text-base font-mono font-black text-white px-2 py-0.2 rounded-lg bg-black/60 border border-neutral-700">
+              {totalReactions}
+            </span>
           </div>
-          <span className="text-lg font-mono font-black text-white px-2 py-0.5 rounded-lg bg-black/60 border border-neutral-700">
-            {totalReactions}
-          </span>
+
+          {/* Google TV 10-Foot HUD Pill */}
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-neutral-900/90 border border-amber-400/50 backdrop-blur-md shadow-xl">
+            <div className="flex items-center gap-1.5 font-black text-amber-400 text-xs">
+              <Tv className="w-3.5 h-3.5" />
+              <span className="font-mono text-[11px] tracking-wider">GOOGLE TV</span>
+            </div>
+            <span className="text-neutral-600">|</span>
+            <div className="flex items-center gap-1 font-mono text-[10px] text-emerald-400 font-bold">
+              <span className={`w-2 h-2 rounded-full ${wakeLockActive ? 'bg-emerald-400 animate-pulse' : 'bg-neutral-600'}`} />
+              <span>{wakeLockActive ? 'WAKELOCK' : 'STANDBY'}</span>
+            </div>
+            {lastRemoteKey && (
+              <>
+                <span className="text-neutral-600">|</span>
+                <span className="px-1.5 py-0.2 rounded bg-amber-400 text-black text-[9px] font-black uppercase tracking-wider">
+                  {lastRemoteKey}
+                </span>
+              </>
+            )}
+            <button
+              id="tv-btn-open-osd"
+              data-tv-focus="true"
+              onClick={() => setIsOSDOpen(true)}
+              className="ml-1 px-2 py-0.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 text-[10px] font-black text-amber-300 border border-amber-400/40 flex items-center gap-1 transition cursor-pointer"
+              title="Press 'M' or Menu on Remote"
+            >
+              <Menu className="w-3 h-3 text-amber-400" />
+              <span>MENU (M)</span>
+            </button>
+          </div>
         </div>
 
-        {/* Right: Scannable Big-Screen QR Code Box */}
-        <div id="tv-qr-box" className="px-4 py-2.5 rounded-2xl bg-neutral-900/80 backdrop-blur-md flex items-center gap-3.5 border border-amber-400/40 shadow-[0_0_20px_rgba(234,179,8,0.2)] shrink-0">
-          <div className="p-1.5 bg-white rounded-xl shadow-inner">
-            <QRCodeSVG 
-              value={qrUrl}
-              size={64}
-              level="M"
-              bgColor="#ffffff"
-              fgColor="#000000"
-              includeMargin={false}
-            />
-          </div>
-          <div className="flex flex-col text-left">
-            <span className="text-[11px] font-black uppercase tracking-widest text-amber-400 flex items-center gap-1">
-              <Sparkles className="w-3 h-3 text-amber-400" /> SCAN TO JOIN
-            </span>
-            <span className="text-xs font-extrabold text-white leading-tight">
-              Snap selfie on phone
-            </span>
-            <span className="text-[10px] font-bold text-neutral-400 tracking-tight mt-0.5">
-              INSTANT BIG SCREEN
-            </span>
+        {/* Right: Scannable Big-Screen QR Code Box & Google TV Install */}
+        <div className="flex items-center gap-3">
+          <SessionQRCode
+            variant="tv-badge"
+            jumbo={largeQR}
+            onToggleJumbo={() => setLargeQR(prev => !prev)}
+            focusId="tv-qr-box"
+          />
+
+          <div className="hidden xl:block">
+            <PWAInstallButton onOpenAndroidPackageModal={() => setIsAndroidModalOpen(true)} />
           </div>
         </div>
       </header>
@@ -559,6 +644,8 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
                   {/* Quick Action Buttons */}
                   <div className="flex items-center gap-2 pt-1">
                     <button
+                      id="tv-btn-stage-next-photo"
+                      data-tv-focus="true"
                       onClick={() => store.nextStagePhoto()}
                       className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-amber-400 hover:bg-amber-300 text-black font-black text-xs uppercase tracking-wider shadow-md transition-transform active:scale-95 cursor-pointer"
                     >
@@ -566,6 +653,8 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
                       <ArrowRight className="w-3.5 h-3.5" />
                     </button>
                     <button
+                      id="tv-btn-stage-airhorn"
+                      data-tv-focus="true"
                       onClick={() => store.triggerHostMoment('Make Some Noise')}
                       className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-black text-xs uppercase tracking-wider transition-transform active:scale-95 cursor-pointer shadow-md"
                     >
@@ -601,8 +690,8 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
                 </p>
               </div>
 
-              <div className="inline-flex items-center gap-3 px-6 py-3.5 rounded-2xl bg-gradient-to-r from-amber-400 to-amber-500 text-black font-black text-base uppercase tracking-wider shadow-[0_0_25px_rgba(234,179,8,0.4)]">
-                <PartyPopper className="w-5 h-5" /> SCAN THE QR CODE TO JOIN NOW
+              <div className="pt-2 flex justify-center">
+                <SessionQRCode variant="tv-card" />
               </div>
             </motion.div>
           )}
@@ -658,6 +747,8 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
                 return (
                   <button
                     key={sub.id}
+                    id={`tv-fame-${sub.id}`}
+                    data-tv-focus="true"
                     onClick={() => store.featureNow(sub.id)}
                     className={`flex items-center gap-2.5 px-3 py-1.5 rounded-xl transition-all duration-300 cursor-pointer ${
                       isCurrentlyFeatured 
@@ -724,6 +815,67 @@ export const TVDisplay: React.FC<TVDisplayProps> = ({ isStandalone = false }) =>
           TAG <strong className="text-amber-400">{event.instagramHandle || '@londonkaraokeclub'}</strong> FOR SHOTS
         </div>
       </div>
+
+      {/* GOOGLE TV OVERSCAN CALIBRATION GUIDE */}
+      <TVOverscanGuide 
+        visible={overscanGuideVisible} 
+        onClose={() => setOverscanGuideVisible(false)} 
+      />
+
+      {/* GOOGLE TV QUICK ACTION LEANBACK OSD BAR */}
+      <GoogleTVQuickBar
+        isOpen={isOSDOpen}
+        onClose={() => setIsOSDOpen(false)}
+        isAutoRotating={isAutoRotating}
+        onTogglePlayPause={() => setIsAutoRotating(prev => !prev)}
+        onNextPhoto={() => {
+          store.nextStagePhoto();
+          setTransitionIndex(prev => (prev + 1) % transitionStyles.length);
+        }}
+        onPrevPhoto={() => {
+          store.prevStagePhoto();
+          setTransitionIndex(prev => (prev - 1 + transitionStyles.length) % transitionStyles.length);
+        }}
+        activeScene={activeScene}
+        onSelectScene={(scene) => {
+          if (scene === 'STAR_OF_NIGHT') {
+            store.triggerStarOfNight();
+          } else {
+            store.setScene(scene);
+          }
+        }}
+        overscanPercent={overscanPercent}
+        onCycleOverscan={() => {
+          setOverscanPercent(prev => {
+            if (prev === 0) return 3;
+            if (prev === 3) return 5;
+            if (prev === 5) return 7;
+            return 0;
+          });
+        }}
+        overscanGuideVisible={overscanGuideVisible}
+        onToggleOverscanGuide={() => setOverscanGuideVisible(prev => !prev)}
+        largeQR={largeQR}
+        onToggleLargeQR={() => setLargeQR(prev => !prev)}
+        lowerThirdActive={lowerThirdActive}
+        onToggleLowerThird={() => setLowerThirdActive(prev => !prev)}
+        onOpenAndroidPackageModal={() => setIsAndroidModalOpen(true)}
+        wakeLockActive={wakeLockActive}
+      />
+
+      {/* VIRTUAL GOOGLE TV REMOTE CONTROL (ON-SCREEN HUD) */}
+      <VirtualGoogleTVRemote
+        onRemoteAction={triggerRemoteButton}
+        lastActiveKey={lastRemoteKey}
+        onOpenAndroidPackageModal={() => setIsAndroidModalOpen(true)}
+        wakeLockActive={wakeLockActive}
+      />
+
+      {/* ANDROID TV PACKAGE / APK SPECS MODAL */}
+      <AndroidTVPackageModal
+        isOpen={isAndroidModalOpen}
+        onClose={() => setIsAndroidModalOpen(false)}
+      />
     </div>
   );
 };
